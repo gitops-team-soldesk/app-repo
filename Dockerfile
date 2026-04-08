@@ -1,43 +1,60 @@
-FROM golang:1.26-alpine AS builder
+# =============================================
+# Stage 1: Builder
+# Go 애플리케이션 빌드
+# =============================================
+FROM golang:alpine AS builder
 
-ARG REVISION
+# 빌드에 필요한 도구 설치
+RUN apk add --no-cache git ca-certificates
 
-RUN mkdir -p /podinfo/
+# 작업 디렉토리 설정
+WORKDIR /app
 
-WORKDIR /podinfo
-
-COPY . .
-
+# 의존성 파일 먼저 복사 (캐시 활용)
+COPY go.mod go.sum ./
 RUN go mod download
 
-RUN CGO_ENABLED=0 go build -ldflags "-s -w \
-    -X github.com/stefanprodan/podinfo/pkg/version.REVISION=${REVISION}" \
-    -a -o bin/podinfo cmd/podinfo/*
+# 소스 코드 복사
+COPY . .
 
-RUN CGO_ENABLED=0 go build -ldflags "-s -w \
-    -X github.com/stefanprodan/podinfo/pkg/version.REVISION=${REVISION}" \
-    -a -o bin/podcli cmd/podcli/*
+# 바이너리 빌드 (정적 링크)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o /podinfo ./cmd/podinfo
 
-FROM alpine:3.23
+# =============================================
+# Stage 2: Runtime
+# 최소 이미지로 실행
+# =============================================
+FROM alpine:3.19
 
-ARG BUILD_DATE
-ARG VERSION
-ARG REVISION
+# 보안: 루트가 아닌 사용자 생성
+RUN addgroup -g 1000 podinfo && \
+    adduser -u 1000 -G podinfo -D podinfo
 
-LABEL maintainer="stefanprodan"
+# CA 인증서 복사 (HTTPS 통신용)
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-RUN addgroup -S app \
-    && adduser -S -G app app \
-    && apk --no-cache add \
-    ca-certificates curl netcat-openbsd
+# [수정] UI 정적 파일 폴더 복사 추가
+COPY --from=builder /app/ui /app/ui
 
-WORKDIR /home/app
+# 빌드된 바이너리 복사
+COPY --from=builder /podinfo /app/podinfo
 
-COPY --from=builder /podinfo/bin/podinfo .
-COPY --from=builder /podinfo/bin/podcli /usr/local/bin/podcli
-COPY ./ui ./ui
-RUN chown -R app:app ./
+# 실행 권한 설정
+RUN chmod +x /app/podinfo
 
-USER app
+# 작업 디렉토리
+WORKDIR /app
 
-CMD ["./podinfo"]
+# non-root 사용자로 전환
+USER podinfo
+
+# 포트 노출
+EXPOSE 9898 9999
+
+# 헬스체크
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -qO- http://localhost:9898/healthz || exit 1
+
+# 실행
+ENTRYPOINT ["/app/podinfo"]

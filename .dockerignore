@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+.github
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Go 빌드 결과물
+/bin
+/dist
+
+# 테스트
+*_test.go
+coverage.out
+coverage.html
+
+# 문서
+*.md
+!README.md
+docs/
+LICENSE
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# 기타
+.env
+.env.*
+Makefile
