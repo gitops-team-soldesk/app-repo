@@ -87,7 +87,7 @@ jobs:
         env:
           NEW_TAG: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
-          cd config-repo/k8s/overlays/dev
+          cd config-repo/CD/k8s/overlays/dev
 
           kustomize edit set image \
             ghcr.io/stefanprodan/podinfo=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${NEW_TAG}
