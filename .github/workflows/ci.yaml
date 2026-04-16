@@ -10,7 +10,7 @@ on:
 
 env:
   AWS_REGION: ap-northeast-2
-  # ⚠️ terraform output으로 확인한 실제 값으로 변경!
+  # terraform output ecr_repository_url
   ECR_REGISTRY: 904053119728.dkr.ecr.ap-northeast-2.amazonaws.com
   ECR_REPOSITORY: gitops-app
 
@@ -19,6 +19,9 @@ permissions:
   contents: read
 
 jobs:
+  # ============================================
+  # Job 1: Build & Push
+  # ============================================
   build-and-push:
     name: Build and Push to ECR
     runs-on: ubuntu-latest
@@ -32,11 +35,12 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # ⚠️ terraform output으로 확인한 실제 값!
+          # terraform output github_actions_role_arn
           role-to-assume: arn:aws:iam::904053119728:role/gitops-github-actions-role
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push Docker image
@@ -47,8 +51,63 @@ jobs:
           IMAGE_TAG="v1.0.0-${DATE}-${SHORT_SHA}"
 
           FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}"
+          LATEST_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"
 
-          docker build -t ${FULL_IMAGE} .
+          echo "🔨 Building: ${FULL_IMAGE}"
+
+          docker build -t ${FULL_IMAGE} -t ${LATEST_IMAGE} .
           docker push ${FULL_IMAGE}
+          docker push ${LATEST_IMAGE}
 
+          echo "✅ Push complete!"
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+  # ============================================
+  # Job 2: Update config-repo
+  # ============================================
+  update-config:
+    name: Update config-repo
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout config-repo
+        uses: actions/checkout@v4
+        with:
+          # Organization name check
+          repository: gitops-team-soldesk/config-repo
+          token: ${{ secrets.CONFIG_REPO_PAT }}
+          path: config-repo
+
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Update image tag
+        env:
+          NEW_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          cd config-repo/k8s/overlays/dev
+
+          kustomize edit set image \
+            ghcr.io/stefanprodan/podinfo=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${NEW_TAG}
+
+          echo "✅ Updated to: ${NEW_TAG}"
+          cat kustomization.yaml
+
+      - name: Commit and push
+        env:
+          NEW_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          cd config-repo
+
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git add .
+          git diff --staged --quiet || git commit -m "chore: Update image to ${NEW_TAG}
+
+          Triggered by: ${{ github.event.head_commit.message }}
+          Commit: ${{ github.sha }}"
+
+          git push
