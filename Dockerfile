@@ -57,4 +57,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -qO- http://localhost:9898/healthz || exit 1
 
 # 실행
-ENTRYPOINT ["/app/podinfo"]
+ENTRYPOINT ["/app/podinfo"]# trigger Fri Apr 17 16:52:32     2026
