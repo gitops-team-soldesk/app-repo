@@ -58,3 +58,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # 실행
 ENTRYPOINT ["/app/podinfo"]# trigger Fri Apr 17 16:52:32     2026
+# trigger Fri Apr 17 17:12:29     2026
+# trigger test d6 Fri Apr 17 17:12:47     2026
