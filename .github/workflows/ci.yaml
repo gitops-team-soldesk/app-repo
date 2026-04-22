@@ -16,18 +16,81 @@ env:
 permissions:
   id-token: write
   contents: read
-  security-events: write  # Trivy SARIF 업로드용
+  security-events: write
 
 jobs:
   # ============================================
-  # Job 1: Build & Push
+  # Job 1: Build & Test (PR + Push 공통)
   # ============================================
-  build-and-push:
-    name: Build and Push to ECR
+  build-and-test:
+    name: Build and Test
     runs-on: ubuntu-latest
     outputs:
-      image_tag: ${{ steps.build.outputs.image_tag }}
-      full_image: ${{ steps.build.outputs.full_image }}
+      image_tag: ${{ steps.meta.outputs.tag }}
+      full_image: ${{ steps.meta.outputs.full }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          DATE=$(date +%y%m%d)
+          TAG="v1.0.0-${DATE}-${SHORT_SHA}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "full=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::904053119728:role/gitops-github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        run: docker build -t ${{ steps.meta.outputs.full }} .
+
+      # ============================================
+      # Trivy 스캔 (exit-code: 0 → D8에서 1로 변경)
+      # ============================================
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.full }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '0'              # D7: 경고만, D8: '1'로 변경
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # ============================================
+      # 🔴 PR일 때는 여기서 종료
+      # ============================================
+      - name: PR build summary
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🛑 PR 빌드 완료: ECR 푸시 생략"
+          echo "✅ 빌드 테스트 통과"
+          echo "✅ Trivy 스캔 완료"
+
+  # ============================================
+  # Job 2: Push to ECR (main push만)
+  # ============================================
+  push-to-ecr:
+    name: Push to ECR
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
       - name: Checkout code
@@ -42,98 +105,53 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build Docker image
-        id: build
+      - name: Build and Push Docker image
         run: |
-          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-          DATE=$(date +%y%m%d)
-          IMAGE_TAG="v1.0.0-${DATE}-${SHORT_SHA}"
-
-          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}"
-
+          FULL_IMAGE="${{ needs.build-and-test.outputs.full_image }}"
+          IMAGE_TAG="${{ needs.build-and-test.outputs.image_tag }}"
+          
           docker build -t ${FULL_IMAGE} .
-
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
-
-      # ============================================
-      # 🔴 Trivy 스캔
-      # ============================================
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.build.outputs.full_image }}
-          format: 'table'
-          # 🟡 exit-code 설정
-          # '1': CRITICAL 취약점 있으면 빌드 실패
-          # '0': 경고만 표시하고 계속 진행
-          exit-code: '0'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-
-      # SARIF 리포트 (GitHub Security 탭)
-      - name: Run Trivy for SARIF
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.build.outputs.full_image }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-      - name: Push Docker image
-        run: |
-          docker push ${{ steps.build.outputs.full_image }}
-
-          # latest 태그
-          docker tag ${{ steps.build.outputs.full_image }} \
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          docker push ${FULL_IMAGE}
+          
+          # latest 태그도 푸시
+          docker tag ${FULL_IMAGE} ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          
+          echo "✅ Pushed: ${IMAGE_TAG}"
 
   # ============================================
-  # Job 2: Update config-repo
+  # Job 3: Update config-repo (dev)
   # ============================================
-  update-config:
-    name: Update config-repo
+  update-config-dev:
+    name: Update config-repo (dev)
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: push-to-ecr
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
       - name: Checkout config-repo
         uses: actions/checkout@v4
         with:
-          repository: gitops-team-soldesk/config-repo
+          repository: gitops-team-2024/config-repo
           token: ${{ secrets.CONFIG_REPO_PAT }}
           path: config-repo
 
       - name: Setup Kustomize
         uses: imranismail/setup-kustomize@v2
 
-      - name: Update image tag
-        env:
-          NEW_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+      - name: Update dev image tag
         run: |
-          cd config-repo/CD/k8s/overlays/dev
-
+          NEW_TAG="${{ needs.push-to-ecr.outputs.image_tag || needs.build-and-test.outputs.image_tag }}"
+          
+          cd config-repo/k8s/overlays/dev
           kustomize edit set image \
             ghcr.io/stefanprodan/podinfo=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${NEW_TAG}
 
       - name: Commit and push
-        env:
-          NEW_TAG: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
           cd config-repo
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git add .
-          git diff --staged --quiet || git commit -m "chore: Update image to ${NEW_TAG} (Trivy scanned)"
+          git diff --staged --quiet || git commit -m "chore(dev): Update image to ${{ needs.build-and-test.outputs.image_tag }}"
           git push
