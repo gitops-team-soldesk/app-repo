@@ -73,7 +73,7 @@ jobs:
       - name: Checkout config-repo
         uses: actions/checkout@v4
         with:
-          repository: gitops-team-2024/config-repo
+          repository: gitops-team-soldesk/config-repo
           token: ${{ secrets.CONFIG_REPO_PAT }}
           path: config-repo
 

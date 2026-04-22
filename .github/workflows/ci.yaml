@@ -132,7 +132,7 @@ jobs:
       - name: Checkout config-repo
         uses: actions/checkout@v4
         with:
-          repository: gitops-team-2024/config-repo
+          repository: gitops-team-soldesk/config-repo
           token: ${{ secrets.CONFIG_REPO_PAT }}
           path: config-repo
 
@@ -143,7 +143,7 @@ jobs:
         run: |
           NEW_TAG="${{ needs.push-to-ecr.outputs.image_tag || needs.build-and-test.outputs.image_tag }}"
           
-          cd config-repo/k8s/overlays/dev
+          cd config-repo/CD/k8s/overlays/dev
           kustomize edit set image \
             ghcr.io/stefanprodan/podinfo=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${NEW_TAG}
 
