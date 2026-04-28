@@ -222,3 +222,4 @@ for multi-env deployments with Flux, Kustomize and Helm.
 <- D4에 config-repo 업데이트 추가 E2E Test #2: Fri Apr 17 16:48:40     2026 -->
 <- D4에 config-repo 업데이트 추가 PR Test -->
 # fix
+<- deploy-prod.yaml E2E RE:Test #1: Tue Apr 28 19:13:10     2026 -->
