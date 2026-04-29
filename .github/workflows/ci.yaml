@@ -155,3 +155,5 @@ jobs:
           git add .
           git diff --staged --quiet || git commit -m "chore(dev): Update image to ${{ needs.build-and-test.outputs.image_tag }}"
           git push
+      # test를 위한 주석 추가
+      # test를 위한 주석 추가
